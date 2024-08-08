@@ -74,7 +74,20 @@ proc_t* insert_process(pid_t pid) {
     new_proc->pid = pid;
     new_proc->npages = 0;
     new_proc->maxpages = (UVM_MAXADDR - UVM_BASEADDR + 1) / sysconf(_SC_PAGESIZE);
-    new_proc->pages = NULL;
+    
+	// Init pages
+    new_proc->pages = (page_data_t*) malloc(new_proc->maxpages * sizeof(page_data_t));
+    if (new_proc->pages == NULL) {
+        free(new_proc); // Clean up the allocated memory for the process if pages allocation fails
+        handle_error("Memory allocation failed for process pages\n");
+        return NULL;
+    }
+    for (int i = 0; i < new_proc->maxpages; i++) {
+        new_proc->pages[i].block = -1;
+        new_proc->pages[i].on_disk = 1;
+        new_proc->pages[i].frame = -1;
+    }
+
     new_proc->next = pager->proc_table[index].head;
     pager->proc_table[index].head = new_proc;
 
@@ -93,6 +106,14 @@ proc_t* lookup_process(pid_t pid) {
     }
 
     return NULL; // Process not found
+}
+
+int get_free_block() {
+  for (int i=0; i < pager->nblocks; i++) {
+    if (pager->block2pid[i] == -1)
+      return i;
+  }
+  return -1;
 }
 
 // TP Functions
@@ -148,7 +169,35 @@ void pager_create(pid_t pid){
 }
 
 void *pager_extend(pid_t pid){
-    return NULL;
+	pthread_mutex_lock(&pager->mutex);
+	if (pager->blocks_free == 0) {
+		pthread_mutex_unlock(&pager->mutex);
+		return NULL;
+	}
+
+	// Find process and handle errors
+	proc_t* proc = lookup_process(pid);
+	if (proc == NULL)
+		handle_error("Could not find process with giving pid");
+	if (proc->npages + 1 > proc->maxpages) {
+		pthread_mutex_unlock(&pager->mutex);
+		return NULL;
+	}
+	int block = get_free_block();
+
+	pager->block2pid[block] = proc->pid;
+	pager->blocks_free--;
+	
+	proc->pages[proc->npages].block = block;
+    proc->pages[proc->npages].on_disk = 0; // Assuming the new page is not on disk initially
+    proc->pages[proc->npages].frame = -1;  // Initially, the frame is not allocated
+
+	proc->npages++;
+
+	// Calculates virtual address - no idea how this works
+	void *vaddr = (void*) (UVM_BASEADDR + (proc->npages - 1) * sysconf(_SC_PAGESIZE));
+	pthread_mutex_unlock(&pager->mutex);
+    return vaddr;
 }
 
 void pager_fault(pid_t pid, void *addr){
