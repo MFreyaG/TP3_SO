@@ -1,8 +1,10 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <sys/mman.h>
+#include <unistd.h>
 
 #include "pager.h"
+#include "mmu.h"
 
 #define handle_error(msg) \
   do { perror(msg); exit(EXIT_FAILURE); } while (0)
@@ -26,6 +28,7 @@ typedef struct proc {
 	int npages;
 	int maxpages;
 	page_data_t *pages;
+	struct proc *next;
 } proc_t;
 
 typedef struct hash_table_entry {
@@ -46,9 +49,10 @@ typedef struct pager {
     int proc_table_size;
 } pager_t;
 
+pager_t *pager;
 
 // Aux functions
-void frame_data_init(frame_data_t* f) {
+void clean_frame_data(frame_data_t* f) {
 	f->pid = -1;
 	f->page = -1;
 	f->prot = PROT_NONE;
@@ -59,10 +63,42 @@ int hash_function(pid_t pid, int table_size) {
     return pid % table_size;
 }
 
+proc_t* insert_process(pid_t pid) {
+    int index = hash_function(pid, pager->proc_table_size);
+    proc_t *new_proc = (proc_t*) malloc(sizeof(proc_t));
+    if (!new_proc) {
+        handle_error("Memory allocation failed for new process\n");
+        return;
+    }
+
+    new_proc->pid = pid;
+    new_proc->npages = 0;
+    new_proc->maxpages = (UVM_MAXADDR - UVM_BASEADDR + 1) / sysconf(_SC_PAGESIZE);
+    new_proc->pages = NULL;
+    new_proc->next = pager->proc_table[index].head;
+    pager->proc_table[index].head = new_proc;
+
+	return new_proc;
+}
+
+proc_t* lookup_process(pid_t pid) {
+    int index = hash_function(pid, pager->proc_table_size);
+    proc_t *current = pager->proc_table[index].head;
+
+    while (current) {
+        if (current->pid == pid) {
+            return current;
+        }
+        current = current->next;
+    }
+
+    return NULL; // Process not found
+}
+
 // TP Functions
 void pager_init(int nframes, int nblocks) {
 	// Create pager
-	pager_t *pager = (pager_t*) malloc(sizeof(pager_t));
+	pager = (pager_t*) malloc(sizeof(pager_t));
 	if (pager == NULL)
     	handle_error("Cannot allocate memory to pager struct");
 
@@ -77,7 +113,7 @@ void pager_init(int nframes, int nblocks) {
 	if (pager->frames == NULL)
 		handle_error("Cannot allocate frames");
 	for (int i = 0; i < nframes; i++)
-		frame_data_init(&pager->frames[i]);
+		clean_frame_data(&pager->frames[i]);
 	
 	// Handle block init
 	pager->nblocks = nblocks;
@@ -102,7 +138,13 @@ void pager_init(int nframes, int nblocks) {
 }
 
 void pager_create(pid_t pid){
+	pthread_mutex_lock(&pager->mutex);
 
+	proc_t *proc = insert_process(pid);
+	if (proc == NULL)
+		handle_error("Cannot get a free process");
+
+	pthread_mutex_unlock(&pager->mutex);
 }
 
 void *pager_extend(pid_t pid){
@@ -118,5 +160,42 @@ int pager_syslog(pid_t pid, void *addr, size_t len){
 }
 
 void pager_destroy(pid_t pid){
+	pthread_mutex_lock(&pager->mutex);
 
+    int index = hash_function(pid, pager->proc_table_size);
+    
+    // Find the process in the hash table
+    proc_t *current = pager->proc_table[index].head;
+    proc_t *prev = NULL;
+    
+    while (current) {
+        if (current->pid == pid) {
+            // If the process is found, remove it from the linked list
+            if (prev)
+                prev->next = current->next;
+            else
+                pager->proc_table[index].head = current->next;
+            
+            // Free the page table
+            if (current->pages)
+                free(current->pages);
+			
+			// Free used blocks
+			for (int i=0; i<pager->nblocks; i++) {
+				if (pager->block2pid[i] == pid) {
+					pager->block2pid[i] = -1;
+					pager->blocks_free++;
+				}
+			}
+            
+            // Free the process structure
+            free(current);
+            
+            break;
+        }
+        prev = current;
+        current = current->next;
+    }
+
+	pthread_mutex_unlock(&pager->mutex);
 }
