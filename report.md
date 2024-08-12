@@ -15,10 +15,11 @@
 
 3. Referências bibliográficas
 
-Operating Systems: Three Easy Pieces, Remzi H. Arpaci-Dusseau and Andrea C. Arpaci-Dusseau, November, 2023 (Version 1.10)
-https://www.geeksforgeeks.org/paging-in-operating-system/
-https://chatgpt.com/
-EDs Iniciais baseadas na implementação do professor - https://gitlab.dcc.ufmg.br/cunha-dcc605/mempager-assignment/-/blob/master/src/pager.c 
+- Operating Systems: Three Easy Pieces, Remzi H. Arpaci-Dusseau and Andrea C. Arpaci-Dusseau, November, 2023 (Version 1.10)
+- https://www.geeksforgeeks.org/paging-in-operating-system/
+- https://chatgpt.com/
+- EDs Iniciais baseadas na implementação do professor - https://gitlab.dcc.ufmg.br/cunha-dcc605/mempager-assignment/-/blob/master/src/pager.c 
+
 
 4. Detalhes de implementação
     1. Descreva e justifique as estruturas de dados utilizadas em sua solução.
