@@ -14,6 +14,7 @@
     * César de Paula Morais <cesarpmorais@hotmail.com> 50%
 
 3. Referências bibliográficas
+
 Operating Systems: Three Easy Pieces, Remzi H. Arpaci-Dusseau and Andrea C. Arpaci-Dusseau, November, 2023 (Version 1.10)
 https://www.geeksforgeeks.org/paging-in-operating-system/
 https://chatgpt.com/
