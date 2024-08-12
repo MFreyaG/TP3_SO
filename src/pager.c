@@ -331,8 +331,10 @@ int pager_get_free_frame() {
 
 int pager_release_and_get_frame() {
     while (1) {
+        // Move the clock pointer to the next frame
         pager->clock = (pager->clock + 1) % pager->nframes;
 
+        // Get the current frame being inspected
         frame_data_t *frame = &pager->frames[pager->clock];
 
         // If the frame is occupied
@@ -340,30 +342,28 @@ int pager_release_and_get_frame() {
             proc_t *proc = get_proc(frame->pid);
             page_data_t *page = &proc->pages[frame->page];
 
-            // If the frame is dirty, write it to disk
-            if (frame->dirty && !frame->prot) {
-                mmu_disk_write(page->block, pager->clock);
-                page->on_disk = 1;
-                frame->dirty = 0;
-            }
-
             if (frame->prot) {
                 // Remove protection and give the page a second chance
                 frame->prot = PROT_NONE;
                 mmu_chprot(proc->pid, (void*)page_to_vaddr(frame->page), PROT_NONE);
-            } else if (frame->dirty) {
-                // Write to disk, since no second chance
-                mmu_disk_write(page->block, pager->clock);
-                page->on_disk = 1;
-                frame->dirty = 0;
             } else {
-                // Replace the page
+                // Now evict the page: mark as non-resident and clean the frame
                 page->frame = -1;
                 mmu_nonresident(frame->pid, (void*)page_to_vaddr(frame->page));
+                
+                // If the frame is dirty, write it to disk
+                if (frame->dirty) {
+                    mmu_disk_write(page->block, pager->clock);
+                    page->on_disk = 1;
+                    frame->dirty = 0;
+                }
+                
                 clean_frame(frame);
+                
                 return pager->clock;
             }
         }
     }
 }
+
 
