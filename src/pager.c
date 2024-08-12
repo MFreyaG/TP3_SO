@@ -95,9 +95,8 @@ void pager_create(pid_t pid){
 
 	// Pid -1 retrieves a free process.
 	proc_t *proc = get_proc(-1);
-	if(proc == NULL){
-		log_error_and_exit("No free processes avaiable.");
-	}
+	if (proc == NULL)
+		log_error_and_exit("No free processes available.");
 	proc->pid = pid;
 
   	pthread_mutex_unlock(&pager->mutex);
@@ -106,9 +105,8 @@ void pager_create(pid_t pid){
 void *pager_extend(pid_t pid) {
     pthread_mutex_lock(&pager->mutex);
     proc_t *proc = get_proc(pid);
-    if (proc == NULL) {
+    if (proc == NULL)
         log_error_and_exit("Process not found in pager.");
-    }
 
     if (pager->blocks_free == 0 || proc->npages >= proc->maxpages) {
         pthread_mutex_unlock(&pager->mutex);
@@ -331,10 +329,7 @@ int pager_get_free_frame() {
 
 int pager_release_and_get_frame() {
     while (1) {
-        // Move the clock pointer to the next frame
         pager->clock = (pager->clock + 1) % pager->nframes;
-
-        // Get the current frame being inspected
         frame_data_t *frame = &pager->frames[pager->clock];
 
         // If the frame is occupied
@@ -347,7 +342,7 @@ int pager_release_and_get_frame() {
                 frame->prot = PROT_NONE;
                 mmu_chprot(proc->pid, (void*)page_to_vaddr(frame->page), PROT_NONE);
             } else {
-                // Now evict the page: mark as non-resident and clean the frame
+                // Evict the page: mark as non-resident and clean the frame
                 page->frame = -1;
                 mmu_nonresident(frame->pid, (void*)page_to_vaddr(frame->page));
                 
