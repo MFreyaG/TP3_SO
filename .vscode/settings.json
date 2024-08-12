@@ -1,0 +1,6 @@
+{
+    "files.associations": {
+        "pager.h": "c",
+        "errno.h": "c"
+    }
+}
