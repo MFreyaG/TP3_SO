@@ -71,6 +71,7 @@ void pager_init(int nframes, int nblocks) {
 	}
 
 	pager->nblocks = nblocks;
+    pager->clock = -1;
 	pager->blocks_free = nblocks;
 	pager->block2pid = (pid_t*)malloc(nblocks * sizeof(pid_t));
 	for(int i = 0; i < nblocks; i++){
@@ -145,7 +146,8 @@ void pager_fault(pid_t pid, void *addr) {
     proc_t *proc = get_proc(pid);
     int page = vaddr_to_page((intptr_t)addr);
 
-    if(proc->pages[page].frame == -1){
+    if (proc->pages[page].frame == -1) {
+        // Page is not in memory, need to bring it in
         int frame;
 
         if (pager->frames_free > 0) {
@@ -154,11 +156,14 @@ void pager_fault(pid_t pid, void *addr) {
             frame = pager_release_and_get_frame();
         }
 
+        // Initialize the frame
         pager->frames[frame].pid = proc->pid;
         pager->frames[frame].page = page;
-        pager->frames[frame].prot = PROT_READ;
+        pager->frames[frame].prot = PROT_READ;  // Initially set to read-only
+        pager->frames[frame].dirty = 0;         // Not dirty initially
         pager->frames_free--;
 
+        // Load the page into the frame
         if (proc->pages[page].on_disk) {
             mmu_disk_read(proc->pages[page].block, frame);
             proc->pages[page].on_disk = 0;
@@ -168,17 +173,20 @@ void pager_fault(pid_t pid, void *addr) {
 
         proc->pages[page].frame = frame;
 
-        void *vaddr = (void*) page_to_vaddr(page);
+        // Notify the MMU that the page is now resident
+        void *vaddr = (void *) page_to_vaddr(page);
         mmu_resident(proc->pid, vaddr, frame, pager->frames[frame].prot);
     } else {
+        // Page is already in memory
         int frame = proc->pages[page].frame;
 
-        pager->frames[frame].prot |= PROT_WRITE;
-        pager->frames[frame].dirty = 1;
-
-        void *vaddr = (void*) page_to_vaddr(page);
-
-        mmu_chprot(proc->pid, vaddr, pager->frames[frame].prot);
+        // Check if the page fault was due to a write attempt
+        if (!(pager->frames[frame].prot & PROT_WRITE)) {
+            pager->frames[frame].prot |= PROT_WRITE;  // Upgrade to read-write
+            pager->frames[frame].dirty = 1;           // Mark as dirty
+            void *vaddr = (void *) page_to_vaddr(page);
+            mmu_chprot(proc->pid, vaddr, pager->frames[frame].prot);
+        }
     }
 
     pthread_mutex_unlock(&pager->mutex);
@@ -323,29 +331,39 @@ int pager_get_free_frame() {
 
 int pager_release_and_get_frame() {
     while (1) {
-    pager->clock = (pager->clock + 1) % pager->nframes;
+        pager->clock = (pager->clock + 1) % pager->nframes;
 
-    frame_data_t *frame = &pager->frames[pager->clock];
+        frame_data_t *frame = &pager->frames[pager->clock];
 
-    if (frame->pid != -1) {
-        proc_t *proc = get_proc(frame->pid);
-        page_data_t *page = &proc->pages[frame->page];
+        // If the frame is occupied
+        if (frame->pid != -1) {
+            proc_t *proc = get_proc(frame->pid);
+            page_data_t *page = &proc->pages[frame->page];
 
-        if (frame->dirty) {
-            mmu_disk_write(page->block, pager->clock);
-            page->on_disk = 1;
-        }
+            // If the frame is dirty, write it to disk
+            if (frame->dirty && !frame->prot) {
+                mmu_disk_write(page->block, pager->clock);
+                page->on_disk = 1;
+                frame->dirty = 0;
+            }
 
-        if (frame->prot) {
-            frame->prot = PROT_NONE; // Remove a proteção e dá uma segunda chance
-            mmu_chprot(proc->pid, (void*)page_to_vaddr(frame->page), PROT_NONE);
-        } else {
-            // Remove a página da memória se ela não tiver sido protegida na segunda chance
-            page->frame = -1;
-            mmu_nonresident(frame->pid, (void*)page_to_vaddr(frame->page));
-            clean_frame(frame);
-            return pager->clock;
+            if (frame->prot) {
+                // Remove protection and give the page a second chance
+                frame->prot = PROT_NONE;
+                mmu_chprot(proc->pid, (void*)page_to_vaddr(frame->page), PROT_NONE);
+            } else if (frame->dirty) {
+                // Write to disk, since no second chance
+                mmu_disk_write(page->block, pager->clock);
+                page->on_disk = 1;
+                frame->dirty = 0;
+            } else {
+                // Replace the page
+                page->frame = -1;
+                mmu_nonresident(frame->pid, (void*)page_to_vaddr(frame->page));
+                clean_frame(frame);
+                return pager->clock;
+            }
         }
     }
 }
-}
+
